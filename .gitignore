@@ -34,6 +34,11 @@ model/PIFu-multiview/results/
 model/PiFu-singleview/results/
 model/PIFu-multiview/sample_images/
 model/PiFu-singleview/sample_images/
+*.pt
+*.pth
+*.obj
+*.tif
+*.tiff
 
 # Image/video/audio files
 *.png
