@@ -1,0 +1,82 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+model/PiFu-singleview/venv39/
+
+# IDE/editor config
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+Thumbs.db
+
+# Jupyter Notebook
+.ipynb_checkpoints
+*.ipynb
+
+# Model/checkpoint/data files
+checkpoints/
+model/lightweight_human_pose_estimation/checkpoint_iter_370000.pth
+model/PIFu-multiview/checkpoints/
+model/PiFu-singleview/checkpoints/
+eavl/*.obj
+eavl/*.png
+eavl/*.json
+model/PIFu-multiview/results/
+model/PiFu-singleview/results/
+model/PIFu-multiview/sample_images/
+model/PiFu-singleview/sample_images/
+
+# Image/video/audio files
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.bmp
+*.tiff
+*.ico
+*.svg
+*.webp
+*.mp4
+*.avi
+*.mov
+*.mp3
+*.wav
+
+# Log/temp files
+*.log
+*.out
+*.tmp
+*.bak
+
+# OS generated files
+.DS_Store
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+
+# Coverage/test/mypy
+htmlcov/
+.tox/
+.coverage
+.coverage.*
+.cache
+.pytest_cache/
+.mypy_cache/
+
+# Keep only source code, scripts, requirements, and essential docs
+!*.py
+!*.sh
+!*.bat
+!requirements.txt
+!.gitignore
+!README*
+!LICENSE*

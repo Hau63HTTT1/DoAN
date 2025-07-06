@@ -1,0 +1,203 @@
+# Tải conda để setup môi trường
+!wget https://repo.anaconda.com/miniconda/Miniconda3-py37_4.12.0-Linux-x86_64.sh
+!chmod +x Miniconda3-py37_4.12.0-Linux-x86_64.sh
+!./Miniconda3-py37_4.12.0-Linux-x86_64.sh -b -f -p /usr/local
+!conda update conda -y
+
+# Gán biến môi trường và kiểm tra version python
+import sys 
+sys.path.append('/usr/local/lib/python3.7/site-packages')
+!python --version
+
+
+#Tải mô hình pifuhd và upload hình ảnh cần thiết để ra mô hình 3D
+!git clone https://github.com/facebookresearch/pifuhd
+cd /content/pifuhd/sample_images
+from google.colab import files
+filename = list(files.upload().keys())[0]
+import os
+try:
+  image_path = '/content/pifuhd/sample_images/%s' % filename
+except:
+  image_path = '/content/pifuhd/sample_images/test.png' # example image
+image_dir = os.path.dirname(image_path)
+file_name = os.path.splitext(os.path.basename(image_path))[0]
+# output pathes
+obj_path = '/content/pifuhd/results/pifuhd_final/recon/result_%s_256.obj' % file_name
+out_img_path = '/content/pifuhd/results/pifuhd_final/recon/result_%s_256.png' % file_name
+video_path = '/content/pifuhd/results/pifuhd_final/recon/result_%s_256.mp4' % file_name
+video_display_path = '/content/pifuhd/results/pifuhd_final/result_%s_256_display.mp4' % file_name
+cd /content
+
+#Trích chọn đặc trưng hình ảnh 
+!git clone https://github.com/Daniil-Osokin/lightweight-human-pose-estimation.pytorch.git
+cd /content/lightweight-human-pose-estimation.pytorch/
+!wget https://download.01.org/opencv/openvino_training_extensions/models/human_pose_estimation/checkpoint_iter_370000.pth
+
+import torch
+import cv2
+import numpy as np
+from models.with_mobilenet import PoseEstimationWithMobileNet
+from modules.keypoints import extract_keypoints, group_keypoints
+from modules.load_state import load_state
+from modules.pose import Pose, track_poses
+import demo
+
+def get_rect(net, images, height_size):
+    net = net.eval()
+
+    stride = 8
+    upsample_ratio = 4
+    num_keypoints = Pose.num_kpts
+    previous_poses = []
+    delay = 33
+    for image in images:
+        rect_path = image.replace('.%s' % (image.split('.')[-1]), '_rect.txt')
+        img = cv2.imread(image, cv2.IMREAD_COLOR)
+        orig_img = img.copy()
+        heatmaps, pafs, scale, pad = demo.infer_fast(net, img, height_size, stride, upsample_ratio, cpu=False)
+
+        total_keypoints_num = 0
+        all_keypoints_by_type = []
+        for kpt_idx in range(num_keypoints):  # 19th for bg
+            total_keypoints_num += extract_keypoints(heatmaps[:, :, kpt_idx], all_keypoints_by_type, total_keypoints_num)
+
+        pose_entries, all_keypoints = group_keypoints(all_keypoints_by_type, pafs)
+        for kpt_id in range(all_keypoints.shape[0]):
+            all_keypoints[kpt_id, 0] = (all_keypoints[kpt_id, 0] * stride / upsample_ratio - pad[1]) / scale
+            all_keypoints[kpt_id, 1] = (all_keypoints[kpt_id, 1] * stride / upsample_ratio - pad[0]) / scale
+        current_poses = []
+
+        rects = []
+        for n in range(len(pose_entries)):
+            if len(pose_entries[n]) == 0:
+                continue
+            pose_keypoints = np.ones((num_keypoints, 2), dtype=np.int32) * -1
+            valid_keypoints = []
+            for kpt_id in range(num_keypoints):
+                if pose_entries[n][kpt_id] != -1.0:  # keypoint was found
+                    pose_keypoints[kpt_id, 0] = int(all_keypoints[int(pose_entries[n][kpt_id]), 0])
+                    pose_keypoints[kpt_id, 1] = int(all_keypoints[int(pose_entries[n][kpt_id]), 1])
+                    valid_keypoints.append([pose_keypoints[kpt_id, 0], pose_keypoints[kpt_id, 1]])
+            valid_keypoints = np.array(valid_keypoints)
+
+            # Check if we have any valid keypoints
+            if len(valid_keypoints) > 0:
+                pmin = valid_keypoints.min(0)
+                pmax = valid_keypoints.max(0)
+
+                # Calculate center based on all available keypoints
+                center = (0.5 * (pmax[:2] + pmin[:2])).astype(np.int32)
+
+                # For cartoon characters, we need to increase the vertical extension
+                # to properly capture the head
+                height_extension_factor = 2.0  # Increased from 1.5 to 2.0 to capture more of the head
+
+                # Calculate radius
+                width = pmax[0] - pmin[0]
+                height = pmax[1] - pmin[1]
+                radius = int(0.65 * max(width, height))
+
+                # Special case handling - if we have keypoints for the head
+                has_nose = pose_entries[n][0] != -1.0
+                has_eyes = pose_entries[n][14] != -1.0 or pose_entries[n][15] != -1.0
+                has_ears = pose_entries[n][16] != -1.0 or pose_entries[n][17] != -1.0
+
+                if has_nose or has_eyes or has_ears:
+                    # If we have head keypoints, adjust the center upward
+                    head_keypoints = []
+                    for kpt_id in [0, 14, 15, 16, 17]:  # nose, eyes, ears
+                        if pose_entries[n][kpt_id] != -1.0:
+                            head_keypoints.append([pose_keypoints[kpt_id, 0], pose_keypoints[kpt_id, 1]])
+
+                    if head_keypoints:
+                        head_points = np.array(head_keypoints)
+                        head_top = head_points.min(0)[1]  # Get minimum y value (top of detected head)
+
+                        # Calculate how much extra space we need above the detected head points
+                        head_extension = int((pmax[1] - head_top) * 1.2)  # Increased from 0.7 to 1.2 (120% of head height as extra space)
+
+                        # Adjust the center and radius to include more of the head
+                        center[1] = center[1] - int(0.35 * radius)  # Increased from 0.2 to 0.35 to move center more up
+                        radius = max(radius, int(1.4 * height))  # Increased from 1.2 to 1.4 to ensure radius covers the extended head
+
+                # Fallback to different methods if required keypoints are missing
+                elif pose_entries[n][10] != -1.0 or pose_entries[n][13] != -1.0:
+                    # If we have shoulders, use them as reference and extend upwards
+                    shoulders_y = []
+                    if pose_entries[n][5] != -1.0:  # left shoulder
+                        shoulders_y.append(pose_keypoints[5, 1])
+                    if pose_entries[n][2] != -1.0:  # right shoulder
+                        shoulders_y.append(pose_keypoints[2, 1])
+
+                    if shoulders_y:
+                        avg_shoulder_y = sum(shoulders_y) / len(shoulders_y)
+                        # For cartoon characters, estimate head position based on shoulder
+                        head_height = height * 0.5  # Estimate head size based on body
+
+                        # Move center up to account for the head - increased adjustments
+                        center[1] = int(avg_shoulder_y - head_height * 0.8)  # Increased from 0.5 to 0.8
+                        radius = int(1.5 * max(width, height_extension_factor * height))  # Increased from 1.2 to 1.5
+                    else:
+                        # Use hip-based calculation with more aggressive upward extension
+                        center = (0.5 * (pmax[:2] + pmin[:2])).astype(np.int32)
+                        center[1] -= int(0.4 * height)  # Increased from 0.2 to 0.4 to move center up more
+                        radius = int(1.0 * max(width, height_extension_factor * height))  # Increased from 0.8 to 1.0
+
+                elif pose_entries[n][8] != -1.0 and pose_entries[n][11] != -1.0:
+                    # If leg is missing but we have pelvis, extend upward more to catch the head
+                    center = (0.5 * (pose_keypoints[8] + pose_keypoints[11])).astype(np.int32)
+
+                    # For cartoon characters, we need more vertical space
+                    base_radius = np.sqrt(((center[None,:] - valid_keypoints)**2).sum(1)).max(0)
+                    radius = int(1.8 * base_radius)  # Increased from 1.45 to 1.8
+
+                    # Move center up to include more of the head
+                    center[1] -= int(0.3 * radius)  # Increased from 0.15 to 0.3 to move up even more
+
+                else:
+                    # Fallback method - use the image center but try to be smarter about dimensions
+                    center = np.array([img.shape[1]//2, img.shape[0]//2], dtype=np.int32)
+                    # For cartoon figures, use more vertical space
+                    radius = max(img.shape[1]//2, int(img.shape[0] * 0.6))
+
+                # Calculate the rectangle coordinates with extra padding on top
+                x1 = max(0, center[0] - radius)
+                # Add extra padding on top (20% more) specifically for cartoon characters' heads
+                extra_top_padding = int(0.2 * radius)
+                y1 = max(0, center[1] - radius - extra_top_padding)
+                width = min(2*radius, img.shape[1] - x1)
+                height = min(2*radius + extra_top_padding, img.shape[0] - y1)
+
+                rects.append([x1, y1, width, height])
+            else:
+                # If no valid keypoints were detected, use the whole image
+                rects.append([0, 0, img.shape[1], img.shape[0]])
+        np.savetxt(rect_path, np.array(rects), fmt='%d')
+net = PoseEstimationWithMobileNet()
+checkpoint = torch.load('checkpoint_iter_370000.pth', map_location='cpu')
+load_state(net, checkpoint)
+get_rect(net.cuda(), [image_path], 512)
+
+
+#Download mô hình đã train từ pifuhd
+cd /content/pifuhd/
+!sh ./scripts/download_trained_model.sh
+!python -m ensurepip --upgrade
+!python -m pip install --upgrade pip
+!pip --version
+!pip install -r requirements.txt
+!pip install 'torch==1.6.0+cu101' -f https://download.pytorch.org/whl/torch_stable.html
+!pip install 'torchvision==0.7.0+cu101' -f https://download.pytorch.org/whl/torch_stable.html
+!pip install 'pytorch3d==0.2.5'
+!pip install -U scikit-image
+!pip install -U cython
+!pip install "git+https://github.com/philferriere/cocoapi.git#egg=pycocotools&subdirectory=PythonAPI"
+!pip install scikit-image==0.18.3
+
+#Run pifuhd
+# Warning: all images with the corresponding rectangle files under -i will be processed.
+!python -m apps.simple_test -r 256 --use_rect -i $image_dir
+
+# seems that 256 is the maximum resolution that can fit into Google Colab.
+# If you want to reconstruct a higher-resolution mesh, please try with your own machine.
